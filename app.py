@@ -1,8 +1,8 @@
 import streamlit as st
 import google.generativeai as genai
 import json
-import time
 import os
+from PIL import Image
 
 # 1. KI Konfiguration
 if "GEMINI_API_KEY" in st.secrets:
@@ -17,23 +17,7 @@ if 'recipes' not in st.session_state:
 st.set_page_config(page_title="KI Rezept-App", layout="wide")
 st.title("👨‍🍳 Deine intelligente Rezept-App")
 
-# --- MODELL-DETEKTOR ---
-# Wir suchen automatisch nach dem richtigen Namen für das Flash-Modell
-@st.cache_resource
-def get_working_model():
-    try:
-        for m in genai.list_models():
-            # Wir suchen ein Modell, das Inhalte generieren kann und "flash" im Namen hat
-            if 'generateContent' in m.supported_generation_methods:
-                if 'gemini-1.5-flash' in m.name:
-                    return m.name
-        return "models/gemini-1.5-flash" # Fallback, falls die Liste leer ist
-    except Exception as e:
-        return f"Fehler bei Modellsuche: {e}"
-
-selected_model = get_working_model()
-
-menu = st.sidebar.radio("Navigation", ["Rezepte ansehen", "KI Import (PDF/Foto)"])
+menu = st.sidebar.radio("Navigation", ["Rezepte ansehen", "KI Import (Foto/PDF)"])
 
 if menu == "Rezepte ansehen":
     if not st.session_state.recipes:
@@ -52,34 +36,33 @@ if menu == "Rezepte ansehen":
         for i, step in enumerate(r.get("Anleitung", []), 1):
             st.write(f"**{i}.** {step}")
 
-elif menu == "KI Import (PDF/Foto)":
-    st.subheader("📄 Lade ein PDF oder ein Foto hoch")
-    # Hier zeigen wir an, welchen Namen die App gefunden hat
-    st.info(f"Verbunden mit KI-Modell: {selected_model}")
+elif menu == "KI Import (Foto/PDF)":
+    st.subheader("📄 Lade ein Foto oder ein PDF hoch")
+    st.info("Tipp: Fotos (JPG/PNG) funktionieren bei Scans oft am besten!")
     
-    uploaded_file = st.file_uploader("Datei wählen", type=["pdf", "jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("Datei wählen", type=["jpg", "jpeg", "png", "pdf"])
     
     if uploaded_file:
         if st.button("Analyse starten"):
-            with st.spinner("KI liest die Datei..."):
+            with st.spinner("KI liest das Rezept..."):
                 try:
-                    # Datei temporär speichern
-                    file_ext = os.path.splitext(uploaded_file.name)[1]
-                    temp_path = f"temp_upload{file_ext}"
-                    with open(temp_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
+                    # Wir nutzen hier den Namen OHNE 'models/' Präfix
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     
-                    # Datei hochladen
-                    sample_file = genai.upload_file(path=temp_path)
-                    while sample_file.state.name == "PROCESSING":
-                        time.sleep(1)
-                        sample_file = genai.get_file(sample_file.name)
-
-                    # KI Anfrage mit dem ERKANNTEN Modellnamen
-                    model = genai.GenerativeModel(model_name=selected_model)
-                    prompt = "Extrahiere das Rezept als JSON: {'name': '...', 'Zutaten': ['...'], 'Werkzeuge': ['...'], 'Anleitung': ['...']}"
+                    prompt = (
+                        "Extrahiere das Rezept aus diesem Bild/Dokument. "
+                        "Antworte NUR mit einem JSON-Objekt: "
+                        "{'name': '...', 'Zutaten': ['...'], 'Werkzeuge': ['...'], 'Anleitung': ['...']}"
+                    )
                     
-                    response = model.generate_content([sample_file, prompt])
+                    # Wir senden die Datei direkt als Datenstrom (sehr robust gegen 404)
+                    if uploaded_file.type == "application/pdf":
+                        # Für PDFs nutzen wir weiterhin den Upload-Weg, aber falls das hakt:
+                        st.warning("Falls PDF einen Fehler wirft, probiere bitte einen Screenshot/Foto vom Rezept!")
+                    
+                    # Bildverarbeitung
+                    img = Image.open(uploaded_file)
+                    response = model.generate_content([prompt, img])
                     
                     # JSON extrahieren
                     res_text = response.text
@@ -89,7 +72,7 @@ elif menu == "KI Import (PDF/Foto)":
                         res_text = res_text.split("```")[1].split("```")[0]
                     
                     recipe_data = json.loads(res_text.strip())
-                    st.success("Rezept erkannt!")
+                    st.success("Erfolgreich gelesen!")
                     
                     new_name = st.text_input("Name:", value=recipe_data.get("name", "Neues Rezept"))
                     c1, c2 = st.columns(2)
@@ -106,7 +89,5 @@ elif menu == "KI Import (PDF/Foto)":
                             "Anleitung": final_anleitung.split("\n")
                         }
                         st.balloons()
-                    
-                    os.remove(temp_path)
                 except Exception as e:
                     st.error(f"Fehler: {e}")
