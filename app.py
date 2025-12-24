@@ -8,7 +8,7 @@ import os
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    st.error("API Key fehlt in den Secrets!")
+    st.error("API Key fehlt! Bitte in den Streamlit Secrets unter 'GEMINI_API_KEY' eintragen.")
 
 # Datenbank initialisieren
 if 'recipes' not in st.session_state:
@@ -38,52 +38,48 @@ if menu == "Rezepte ansehen":
 
 elif menu == "KI Import (PDF/Foto)":
     st.subheader("📄 Lade ein PDF oder ein Foto hoch")
-    
     uploaded_file = st.file_uploader("Datei wählen", type=["pdf", "jpg", "jpeg", "png"])
     
     if uploaded_file:
         if st.button("Analyse starten"):
-            with st.spinner("KI analysiert die Datei..."):
+            with st.spinner("KI liest die Datei..."):
                 try:
-                    # Dateityp (MIME-Type) merken
-                    mtype = uploaded_file.type
+                    # Temporär speichern mit richtiger Endung für Mime-Type Erkennung
+                    file_extension = os.path.splitext(uploaded_file.name)[1]
+                    temp_path = f"temp_upload{file_extension}"
                     
-                    # Datei temporär speichern
-                    with open("temp_file", "wb") as f:
+                    with open(temp_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
                     
-                    # Datei zu Google hochladen – JETZT MIT MIME-TYPE!
-                    sample_file = genai.upload_file(
-                        path="temp_file", 
-                        display_name="Rezept-Upload",
-                        mime_type=mtype
-                    )
+                    # Datei hochladen
+                    sample_file = genai.upload_file(path=temp_path)
                     
+                    # Warten bis verarbeitet
                     while sample_file.state.name == "PROCESSING":
-                        time.sleep(2)
+                        time.sleep(1)
                         sample_file = genai.get_file(sample_file.name)
 
-                    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+                    # Wir nutzen hier den 'latest' Namen für maximale Kompatibilität
+                    model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
+                    
                     prompt = (
-                        "Analysiere dieses Dokument/Bild und extrahiere das Kochrezept. "
-                        "Antworte NUR mit einem validen JSON-Objekt in diesem Format: "
-                        "{'name': 'Name des Gerichts', 'Zutaten': ['Zutat 1', 'Zutat 2'], "
-                        "'Werkzeuge': ['Topf', 'Messer'], 'Anleitung': ['Schritt 1', 'Schritt 2']}"
+                        "Extrahiere das Rezept als JSON. "
+                        "Format: {'name': '...', 'Zutaten': ['...'], 'Werkzeuge': ['...'], 'Anleitung': ['...']}"
                     )
                     
                     response = model.generate_content([sample_file, prompt])
                     
-                    # JSON extrahieren
-                    raw_text = response.text
-                    if "```json" in raw_text:
-                        raw_text = raw_text.split("```json")[1].split("```")[0]
-                    elif "```" in raw_text:
-                        raw_text = raw_text.split("```")[1].split("```")[0]
+                    # JSON Text säubern
+                    json_text = response.text.strip()
+                    if "```json" in json_text:
+                        json_text = json_text.split("```json")[1].split("```")[0]
+                    elif "```" in json_text:
+                        json_text = json_text.split("```")[1].split("```")[0]
                     
-                    recipe_data = json.loads(raw_text.strip())
+                    recipe_data = json.loads(json_text.strip())
                     
-                    st.success("Erfolgreich gelesen!")
-                    new_name = st.text_input("Name des Rezepts:", value=recipe_data.get("name", "Neues Rezept"))
+                    st.success("Rezept erkannt!")
+                    new_name = st.text_input("Name:", value=recipe_data.get("name", "Neues Rezept"))
                     
                     c1, c2 = st.columns(2)
                     with c1:
@@ -91,7 +87,7 @@ elif menu == "KI Import (PDF/Foto)":
                     with c2:
                         werkzeuge = st.text_area("Werkzeuge", value=", ".join(recipe_data.get("Werkzeuge", [])))
                     
-                    anleitung = st.text_area("Anleitung", value="\n".join(recipe_data.get("Anleitung", [])), height=200)
+                    anleitung = st.text_area("Anleitung", value="\n".join(recipe_data.get("Anleitung", [])))
                     
                     if st.button("In App speichern"):
                         st.session_state.recipes[new_name] = {
@@ -100,9 +96,8 @@ elif menu == "KI Import (PDF/Foto)":
                             "Anleitung": anleitung.split("\n")
                         }
                         st.balloons()
-                        st.success(f"'{new_name}' gespeichert!")
                     
-                    os.remove("temp_file")
+                    os.remove(temp_path)
                     
                 except Exception as e:
                     st.error(f"Fehler: {e}")
