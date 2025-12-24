@@ -1,87 +1,77 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-import pandas as pd
+from pypdf import PdfReader
 
-st.set_page_config(page_title="Mein digitales Kochbuch", page_icon="🥘", layout="wide")
+# 1. Datenbank initialisieren
+if 'recipes' not in st.session_state:
+    st.session_state.recipes = {
+        "Drumsticks SF Style": {
+            "Zutaten": ["1.5kg Hühnerbeine", "75ml Sojasauce"],
+            "Werkzeuge": ["Backblech", "Topf"],
+            "Anleitung": ["Hähnchen marinieren", "Im Ofen backen"]
+        }
+    }
 
-# Verbindung zur Google Tabelle herstellen
-try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(ttl=0)
-except Exception as e:
-    st.error(f"Verbindung zu Google fehlgeschlagen: {e}")
-    st.stop()
+st.set_page_config(page_title="Rezept-App", layout="wide")
+st.title("🍳 Meine Rezept-Verwaltung")
 
-st.title("👨‍🍳 Mein digitales Kochbuch")
+# Sidebar Navigation
+menu = st.sidebar.radio("Navigation", ["Rezepte ansehen", "Neues Rezept (PDF Upload)", "Rezept bearbeiten"])
 
-# Navigation in der Seitenleiste
-menu = st.sidebar.radio("Navigation", ["Rezepte durchsuchen", "Neues Rezept hinzufügen", "Rezept bearbeiten"])
+# --- FUNKTION: REZEPTE ANSEHEN ---
+if menu == "Rezepte ansehen":
+    name = st.selectbox("Wähle ein Rezept:", list(st.session_state.recipes.keys()))
+    r = st.session_state.recipes[name]
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("🛒 Zutaten")
+        for z in r["Zutaten"]: st.write(f"- {z}")
+    with col2:
+        st.subheader("🛠 Hilfsmittel")
+        for w in r["Werkzeuge"]: st.write(f"- {w}")
+    
+    st.subheader("👨‍🍳 Zubereitung")
+    for i, step in enumerate(r["Anleitung"], 1):
+        st.write(f"**{i}.** {step}")
 
-if menu == "Rezepte durchsuchen":
-    if not df.empty:
-        search_query = st.text_input("🔍 Welches Rezept suchst du?")
-        mask = (
-            df['Name'].str.contains(search_query, case=False, na=False) |
-            df['Zutaten'].str.contains(search_query, case=False, na=False)
-        )
-        filtered_df = df[mask]
+# --- FUNKTION: PDF UPLOAD ---
+elif menu == "Neues Rezept (PDF Upload)":
+    st.subheader("📄 Neues Rezept aus PDF erstellen")
+    
+    uploaded_file = st.file_uploader("Wähle eine PDF-Datei aus", type="pdf")
+    
+    if uploaded_file is not None:
+        # PDF Text extrahieren
+        reader = PdfReader(uploaded_file)
+        full_text = ""
+        for page in reader.pages:
+            full_text += page.extract_text() + "\n"
         
-        if not filtered_df.empty:
-            selection = st.selectbox("Gefundene Rezepte:", sorted(filtered_df["Name"].unique().tolist()))
-            r = filtered_df[filtered_df["Name"] == selection].iloc[0]
+        st.info("Text aus PDF erkannt! Bitte unten kurz sortieren:")
+        
+        # Eingabemaske für das neue Rezept
+        new_name = st.text_input("Name des Rezepts", placeholder="z.B. Omas Apfelkuchen")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            z_text = st.text_area("Zutaten (eine pro Zeile)", value=full_text[:200]) # Zeigt ersten Teil als Hilfe
+        with col2:
+            w_text = st.text_area("Werkzeuge (kommagetrennt)")
             
-            st.divider()
-            st.header(f"📖 {r['Name']}")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("🛒 Zutaten")
-                st.write(r["Zutaten"])
-            with col2:
-                st.subheader("🛠 Hilfsmittel")
-                st.write(r["Werkzeuge"])
-            st.subheader("👨‍🍳 Anleitung")
-            st.write(r["Anleitung"])
-    else:
-        st.info("Datenbank ist leer.")
-
-elif menu == "Neues Rezept hinzufügen":
-    st.header("📝 Neues Rezept anlegen")
-    with st.form("add_form"):
-        name = st.text_input("Name")
-        zutaten = st.text_area("Zutaten")
-        werkzeuge = st.text_area("Werkzeuge")
-        anleitung = st.text_area("Anleitung")
-        if st.form_submit_button("Speichern"):
-            if name:
-                new_line = pd.DataFrame([{"Name": name, "Zutaten": zutaten, "Werkzeuge": werkzeuge, "Anleitung": anleitung}])
-                updated_df = pd.concat([df, new_line], ignore_index=True)
-                conn.update(data=updated_df)
-                st.success(f"'{name}' wurde gespeichert!")
-                st.balloons()
+        a_text = st.text_area("Anleitung (ein Schritt pro Zeile)")
+        
+        if st.button("Rezept speichern"):
+            if new_name:
+                # In Datenbank speichern
+                st.session_state.recipes[new_name] = {
+                    "Zutaten": z_text.split("\n"),
+                    "Werkzeuge": w_text.split(","),
+                    "Anleitung": a_text.split("\n")
+                }
+                st.success(f"Rezept '{new_name}' wurde hinzugefügt!")
             else:
-                st.error("Bitte einen Namen angeben.")
+                st.error("Bitte gib einen Namen für das Rezept an.")
 
+# --- FUNKTION: BEARBEITEN ---
 elif menu == "Rezept bearbeiten":
-    st.header("✏️ Rezept anpassen")
-    if not df.empty:
-        edit_selection = st.selectbox("Welches Rezept möchtest du ändern?", sorted(df["Name"].tolist()))
-        # Index des gewählten Rezepts finden
-        idx = df[df["Name"] == edit_selection].index[0]
-        r_to_edit = df.iloc[idx]
-
-        with st.form("edit_form"):
-            new_name = st.text_input("Name", value=r_to_edit["Name"])
-            new_zutaten = st.text_area("Zutaten", value=r_to_edit["Zutaten"])
-            new_werkzeuge = st.text_area("Werkzeuge", value=r_to_edit["Werkzeuge"])
-            new_anleitung = st.text_area("Anleitung", value=r_to_edit["Anleitung"])
-            
-            if st.form_submit_button("Änderungen übernehmen"):
-                # DataFrame an der Stelle idx aktualisieren
-                df.at[idx, "Name"] = new_name
-                df.at[idx, "Zutaten"] = new_zutaten
-                df.at[idx, "Werkzeuge"] = new_werkzeuge
-                df.at[idx, "Anleitung"] = new_anleitung
-                
-                conn.update(data=df)
-                st.success("Änderungen wurden in Google Sheets gespeichert!")
-                st.rerun()
+    st.info("Hier kannst du bestehende Rezepte bald anpassen.")
