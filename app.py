@@ -5,9 +5,12 @@ import json
 
 # KI Konfiguration
 if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Wir nutzen hier die stabilste Bezeichnung
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        # Wir definieren das Modell hier explizit
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    except Exception as e:
+        st.error(f"Fehler bei der KI-Konfiguration: {e}")
 else:
     st.error("API Key fehlt! Bitte in den Streamlit Secrets hinterlegen.")
 
@@ -34,7 +37,7 @@ if menu == "Rezepte ansehen":
             st.subheader("🛠 Hilfsmittel")
             for w in r["Werkzeuge"]: st.write(f"- {w}")
         st.subheader("👨‍🍳 Zubereitung")
-        for i, step in enumerate(r["Anleitung"], 1):
+        for i, step in enumerate(r.get("Anleitung", []), 1):
             st.write(f"**{i}.** {step}")
 
 elif menu == "KI PDF-Import":
@@ -44,41 +47,56 @@ elif menu == "KI PDF-Import":
     if uploaded_file:
         with st.spinner("KI analysiert das Rezept..."):
             try:
+                # Text aus PDF extrahieren
                 reader = PdfReader(uploaded_file)
-                raw_text = "".join([page.extract_text() for page in reader.pages])
+                text_content = ""
+                for page in reader.pages:
+                    text_content += page.extract_text() + "\n"
                 
-                # Der Prompt wurde etwas verfeinert für bessere Stabilität
-                prompt = f"Verwandle diesen Rezepttext in ein JSON-Objekt mit den Feldern 'name', 'Zutaten' (Liste), 'Werkzeuge' (Liste) und 'Anleitung' (Liste). Text: {raw_text}"
-                
-                response = model.generate_content(prompt)
-                
-                # Falls die KI Text um das JSON herum baut, filtern wir das hier
-                clean_text = response.text.strip()
-                if "```json" in clean_text:
-                    clean_text = clean_text.split("```json")[1].split("```")[0].strip()
-                elif "```" in clean_text:
-                    clean_text = clean_text.split("```")[1].split("```")[0].strip()
-                
-                recipe_data = json.loads(clean_text)
-                st.success("Analyse erfolgreich!")
-                
-                new_name = st.text_input("Rezept Name:", value=recipe_data.get("name", "Unbekannt"))
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    zutaten = st.text_area("Zutaten", value="\n".join(recipe_data.get("Zutaten", [])), height=200)
-                with col2:
-                    werkzeuge = st.text_area("Werkzeuge", value=", ".join(recipe_data.get("Werkzeuge", [])))
-                
-                anleitung = st.text_area("Anleitung", value="\n".join(recipe_data.get("Anleitung", [])), height=200)
-                
-                if st.button("Speichern"):
-                    st.session_state.recipes[new_name] = {
-                        "Zutaten": zutaten.split("\n"),
-                        "Werkzeuge": werkzeuge.split(","),
-                        "Anleitung": anleitung.split("\n")
-                    }
-                    st.balloons()
+                if not text_content.strip():
+                    st.error("Das PDF scheint keinen lesbaren Text zu enthalten (vielleicht ein Scan?).")
+                else:
+                    # Die KI-Anfrage
+                    prompt = (
+                        "Extrahiere das Rezept aus folgendem Text. "
+                        "Antworte NUR mit einem validen JSON-Objekt. "
+                        "Struktur: {\"name\": \"...\", \"Zutaten\": [\"...\"], \"Werkzeuge\": [\"...\"], \"Anleitung\": [\"...\"]} "
+                        f"Hier ist der Text: {text_content}"
+                    )
+                    
+                    response = model.generate_content(prompt)
+                    
+                    # JSON-Teil aus der Antwort fischen
+                    raw_res = response.text
+                    if "```json" in raw_res:
+                        raw_res = raw_res.split("```json")[1].split("```")[0]
+                    elif "```" in raw_res:
+                        raw_res = raw_res.split("```")[1].split("```")[0]
+                    
+                    recipe_data = json.loads(raw_res.strip())
+                    
+                    st.success("Analyse erfolgreich!")
+                    
+                    # Bearbeitbare Felder anzeigen
+                    final_name = st.text_input("Name:", value=recipe_data.get("name", "Neues Rezept"))
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        final_zutaten = st.text_area("Zutaten", value="\n".join(recipe_data.get("Zutaten", [])))
+                    with c2:
+                        final_werkzeuge = st.text_area("Werkzeuge", value=", ".join(recipe_data.get("Werkzeuge", [])))
+                    
+                    final_anleitung = st.text_area("Anleitung", value="\n".join(recipe_data.get("Anleitung", [])))
+                    
+                    if st.button("Rezept speichern"):
+                        st.session_state.recipes[final_name] = {
+                            "Zutaten": final_zutaten.split("\n"),
+                            "Werkzeuge": final_werkzeuge.split(","),
+                            "Anleitung": final_anleitung.split("\n")
+                        }
+                        st.balloons()
+                        st.success("Gespeichert!")
+            
             except Exception as e:
-                st.error(f"Fehler: {str(e)}")
-                st.write("Versuche es bitte noch einmal oder prüfe, ob das PDF Text enthält.")
+                st.error(f"Da ist etwas schiefgelaufen: {e}")
+                st.info("Tipp: Manchmal hilft es, das PDF noch einmal hochzuladen.")
