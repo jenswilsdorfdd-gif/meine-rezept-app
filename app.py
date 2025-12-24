@@ -2,30 +2,27 @@ import streamlit as st
 from pypdf import PdfReader
 import google.generativeai as genai
 import json
+from PIL import Image
+import io
 
 # KI Konfiguration
 if "GEMINI_API_KEY" in st.secrets:
-    try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        # Wir definieren das Modell hier explizit
-        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-    except Exception as e:
-        st.error(f"Fehler bei der KI-Konfiguration: {e}")
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 else:
-    st.error("API Key fehlt! Bitte in den Streamlit Secrets hinterlegen.")
+    st.error("API Key fehlt!")
 
-# Datenbank initialisieren
 if 'recipes' not in st.session_state:
     st.session_state.recipes = {}
 
 st.set_page_config(page_title="KI Rezept-App", layout="wide")
-st.title("🤖 Rezept-App mit KI-Import")
+st.title("🤖 Rezept-App (liest jetzt auch Scans & Fotos)")
 
-menu = st.sidebar.radio("Navigation", ["Rezepte ansehen", "KI PDF-Import"])
+menu = st.sidebar.radio("Navigation", ["Rezepte ansehen", "KI Import (PDF/Foto)"])
 
 if menu == "Rezepte ansehen":
     if not st.session_state.recipes:
-        st.info("Noch keine Rezepte vorhanden. Nutze den KI-Import!")
+        st.info("Noch keine Rezepte vorhanden.")
     else:
         name = st.selectbox("Wähle ein Rezept:", list(st.session_state.recipes.keys()))
         r = st.session_state.recipes[name]
@@ -40,33 +37,33 @@ if menu == "Rezepte ansehen":
         for i, step in enumerate(r.get("Anleitung", []), 1):
             st.write(f"**{i}.** {step}")
 
-elif menu == "KI PDF-Import":
-    st.subheader("📄 Automatischer Import via Gemini KI")
-    uploaded_file = st.file_uploader("PDF hochladen", type="pdf")
+elif menu == "KI Import (PDF/Foto)":
+    st.subheader("📄 Upload: PDF oder Foto vom Rezept")
+    # Erlaubt jetzt auch Bilder!
+    uploaded_file = st.file_uploader("Datei wählen (PDF, JPG, PNG)", type=["pdf", "jpg", "jpeg", "png"])
     
     if uploaded_file:
-        with st.spinner("KI analysiert das Rezept..."):
+        with st.spinner("KI liest das Rezept..."):
             try:
-                # Text aus PDF extrahieren
-                reader = PdfReader(uploaded_file)
-                text_content = ""
-                for page in reader.pages:
-                    text_content += page.extract_text() + "\n"
+                content_to_send = []
                 
-                if not text_content.strip():
-                    st.error("Das PDF scheint keinen lesbaren Text zu enthalten (vielleicht ein Scan?).")
+                if uploaded_file.type == "application/pdf":
+                    # Versuche Text zu lesen
+                    reader = PdfReader(uploaded_file)
+                    text = "".join([p.extract_text() for p in reader.pages])
+                    if text.strip():
+                        content_to_send.append(f"Extrahiere Rezept-JSON aus diesem Text: {text}")
+                    else:
+                        st.warning("Gescannte PDF erkannt. Tipp: Mache lieber ein Foto oder einen Screenshot vom Rezept!")
+                        # Für echte Scans in PDFs bräuchten wir ein Zusatztool. 
+                        # Einfacher Workaround: Der User lädt ein Bild hoch.
                 else:
-                    # Die KI-Anfrage
-                    prompt = (
-                        "Extrahiere das Rezept aus folgendem Text. "
-                        "Antworte NUR mit einem validen JSON-Objekt. "
-                        "Struktur: {\"name\": \"...\", \"Zutaten\": [\"...\"], \"Werkzeuge\": [\"...\"], \"Anleitung\": [\"...\"]} "
-                        f"Hier ist der Text: {text_content}"
-                    )
-                    
-                    response = model.generate_content(prompt)
-                    
-                    # JSON-Teil aus der Antwort fischen
+                    # Es ist ein Bild!
+                    img = Image.open(uploaded_file)
+                    content_to_send = ["Extrahiere das Rezept aus diesem Bild. Antworte NUR mit JSON: {'name': '...', 'Zutaten': ['...'], 'Werkzeuge': ['...'], 'Anleitung': ['...']}", img]
+
+                if content_to_send:
+                    response = model.generate_content(content_to_send)
                     raw_res = response.text
                     if "```json" in raw_res:
                         raw_res = raw_res.split("```json")[1].split("```")[0]
@@ -74,29 +71,22 @@ elif menu == "KI PDF-Import":
                         raw_res = raw_res.split("```")[1].split("```")[0]
                     
                     recipe_data = json.loads(raw_res.strip())
+                    st.success("Erkannt!")
                     
-                    st.success("Analyse erfolgreich!")
-                    
-                    # Bearbeitbare Felder anzeigen
                     final_name = st.text_input("Name:", value=recipe_data.get("name", "Neues Rezept"))
-                    
                     c1, c2 = st.columns(2)
                     with c1:
                         final_zutaten = st.text_area("Zutaten", value="\n".join(recipe_data.get("Zutaten", [])))
                     with c2:
                         final_werkzeuge = st.text_area("Werkzeuge", value=", ".join(recipe_data.get("Werkzeuge", [])))
-                    
                     final_anleitung = st.text_area("Anleitung", value="\n".join(recipe_data.get("Anleitung", [])))
                     
-                    if st.button("Rezept speichern"):
+                    if st.button("Speichern"):
                         st.session_state.recipes[final_name] = {
                             "Zutaten": final_zutaten.split("\n"),
                             "Werkzeuge": final_werkzeuge.split(","),
                             "Anleitung": final_anleitung.split("\n")
                         }
                         st.balloons()
-                        st.success("Gespeichert!")
-            
             except Exception as e:
-                st.error(f"Da ist etwas schiefgelaufen: {e}")
-                st.info("Tipp: Manchmal hilft es, das PDF noch einmal hochzuladen.")
+                st.error(f"Fehler: {e}")
