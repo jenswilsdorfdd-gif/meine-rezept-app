@@ -38,27 +38,31 @@ if menu == "Rezepte ansehen":
 
 elif menu == "KI Import (PDF/Foto)":
     st.subheader("📄 Lade ein PDF oder ein Foto hoch")
-    st.write("Die KI erkennt Text, Scans und sogar Handschrift.")
     
     uploaded_file = st.file_uploader("Datei wählen", type=["pdf", "jpg", "jpeg", "png"])
     
     if uploaded_file:
         if st.button("Analyse starten"):
-            with st.spinner("KI liest die Datei... das kann bis zu 30 Sek. dauern."):
+            with st.spinner("KI analysiert die Datei..."):
                 try:
-                    # Datei temporär speichern, damit Gemini sie hochladen kann
+                    # Dateityp (MIME-Type) merken
+                    mtype = uploaded_file.type
+                    
+                    # Datei temporär speichern
                     with open("temp_file", "wb") as f:
                         f.write(uploaded_file.getbuffer())
                     
-                    # Datei zu Google hochladen
-                    sample_file = genai.upload_file(path="temp_file", display_name="Rezept-Upload")
+                    # Datei zu Google hochladen – JETZT MIT MIME-TYPE!
+                    sample_file = genai.upload_file(
+                        path="temp_file", 
+                        display_name="Rezept-Upload",
+                        mime_type=mtype
+                    )
                     
-                    # Warten, bis Google die Datei verarbeitet hat
                     while sample_file.state.name == "PROCESSING":
                         time.sleep(2)
                         sample_file = genai.get_file(sample_file.name)
 
-                    # Die KI fragen (Wir nutzen hier das stabilste Modell)
                     model = genai.GenerativeModel(model_name="gemini-1.5-flash")
                     prompt = (
                         "Analysiere dieses Dokument/Bild und extrahiere das Kochrezept. "
@@ -78,7 +82,6 @@ elif menu == "KI Import (PDF/Foto)":
                     
                     recipe_data = json.loads(raw_text.strip())
                     
-                    # Anzeige der Ergebnisse
                     st.success("Erfolgreich gelesen!")
                     new_name = st.text_input("Name des Rezepts:", value=recipe_data.get("name", "Neues Rezept"))
                     
@@ -99,10 +102,7 @@ elif menu == "KI Import (PDF/Foto)":
                         st.balloons()
                         st.success(f"'{new_name}' gespeichert!")
                     
-                    # Temp Datei aufräumen
                     os.remove("temp_file")
                     
                 except Exception as e:
                     st.error(f"Fehler: {e}")
-                    if "404" in str(e):
-                        st.warning("Tipp: Der 404 Fehler deutet oft auf ein Problem mit der Modell-Verfügbarkeit hin. Ich versuche es im Hintergrund zu korrigieren.")
