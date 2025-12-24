@@ -3,10 +3,10 @@ from pypdf import PdfReader
 import google.generativeai as genai
 import json
 
-# 1. KI Konfiguration (holt den Key sicher aus dem Tresor)
-# Stelle sicher, dass du den Key in den Streamlit Secrets unter "GEMINI_API_KEY" gespeichert hast!
+# KI Konfiguration
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    # Wir nutzen hier die stabilste Bezeichnung
     model = genai.GenerativeModel('gemini-1.5-flash')
 else:
     st.error("API Key fehlt! Bitte in den Streamlit Secrets hinterlegen.")
@@ -44,46 +44,41 @@ elif menu == "KI PDF-Import":
     if uploaded_file:
         with st.spinner("KI analysiert das Rezept..."):
             try:
-                # PDF Text lesen
                 reader = PdfReader(uploaded_file)
                 raw_text = "".join([page.extract_text() for page in reader.pages])
                 
-                # KI-Anfrage (Prompt)
-                prompt = f"""
-                Extrahiere das Rezept aus folgendem Text und gib es NUR als JSON zurück.
-                Format: {{"name": "...", "Zutaten": ["..."], "Werkzeuge": ["..."], "Anleitung": ["..."]}}
-                Text: {raw_text}
-                """
+                # Der Prompt wurde etwas verfeinert für bessere Stabilität
+                prompt = f"Verwandle diesen Rezepttext in ein JSON-Objekt mit den Feldern 'name', 'Zutaten' (Liste), 'Werkzeuge' (Liste) und 'Anleitung' (Liste). Text: {raw_text}"
                 
                 response = model.generate_content(prompt)
                 
-                # Bereinigung der KI-Antwort
-                json_str = response.text.replace("```json", "").replace("```", "").strip()
-                recipe_data = json.loads(json_str)
+                # Falls die KI Text um das JSON herum baut, filtern wir das hier
+                clean_text = response.text.strip()
+                if "```json" in clean_text:
+                    clean_text = clean_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in clean_text:
+                    clean_text = clean_text.split("```")[1].split("```")[0].strip()
                 
-                st.success("Analyse fertig!")
+                recipe_data = json.loads(clean_text)
+                st.success("Analyse erfolgreich!")
                 
-                # Felder zum Bestätigen
-                new_name = st.text_input("Name des Rezepts:", value=recipe_data.get("name", "Neues Rezept"))
+                new_name = st.text_input("Rezept Name:", value=recipe_data.get("name", "Unbekannt"))
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    zutaten_liste = recipe_data.get("Zutaten", [])
-                    zutaten = st.text_area("Zutaten (bearbeitbar)", value="\n".join(zutaten_liste), height=200)
+                    zutaten = st.text_area("Zutaten", value="\n".join(recipe_data.get("Zutaten", [])), height=200)
                 with col2:
-                    werkzeuge_liste = recipe_data.get("Werkzeuge", [])
-                    werkzeuge = st.text_area("Werkzeuge", value=", ".join(werkzeuge_liste))
+                    werkzeuge = st.text_area("Werkzeuge", value=", ".join(recipe_data.get("Werkzeuge", [])))
                 
-                anleitung_liste = recipe_data.get("Anleitung", [])
-                anleitung = st.text_area("Anleitung", value="\n".join(anleitung_liste), height=200)
+                anleitung = st.text_area("Anleitung", value="\n".join(recipe_data.get("Anleitung", [])), height=200)
                 
-                if st.button("Rezept endgültig speichern"):
+                if st.button("Speichern"):
                     st.session_state.recipes[new_name] = {
                         "Zutaten": zutaten.split("\n"),
                         "Werkzeuge": werkzeuge.split(","),
                         "Anleitung": anleitung.split("\n")
                     }
                     st.balloons()
-                    st.success(f"'{new_name}' wurde gespeichert!")
             except Exception as e:
-                st.error(f"Fehler bei der Analyse: {e}")
+                st.error(f"Fehler: {str(e)}")
+                st.write("Versuche es bitte noch einmal oder prüfe, ob das PDF Text enthält.")
